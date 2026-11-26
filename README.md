@@ -9,6 +9,7 @@ Do it this way unless the game has a reason not to; if it has one, write the rea
 **Contents**
 
 1. [The rules on one page](#1-the-rules-on-one-page)
+   * [Prototype first, then tests and translations](#prototype-first-then-tests-and-translations)
 2. [Stack and repository layout](#2-stack-and-repository-layout)
 3. [Git LFS](#3-git-lfs)
 4. [Code structure](#4-code-structure)
@@ -58,6 +59,10 @@ Do it this way unless the game has a reason not to; if it has one, write the rea
 * The vision and the rules are **Godot-free** and unit-tested; one bridge node connects them to the game.
 * Game logic and UI run on **game time**.
 
+**Order of work**
+* **Prototype first**: until the game works, only the formatting, lint and typing checks (`precommit.py --prototype`).
+* **Then** the tests and the translations, before the first release (see below).
+
 **Quality**
 * Unit tests, **property-based tests** (CsCheck), and a **seeded end-to-end bot** that plays the whole game through the bridge at high speed and checks **contracts** on every frame:
   * **no text overflows**, no GUI element overflows the screen, its parent or another element;
@@ -81,6 +86,31 @@ Do it this way unless the game has a reason not to; if it has one, write the rea
 * Every development script is **Python in `dev/`**; `dev/publish.py` exports, checks and zips every platform.
 * GitHub Actions run CI on every push and publish on every release.
 * README (players), CONTRIBUTING (developers), DESIGN (designers), THIRD_PARTY_NOTICES (licenses).
+
+### Prototype first, then tests and translations
+
+**While prototyping**, until the game is playable end to end with real players, run only the fast checks:
+
+```
+venv/bin/python dev/continuous_integration/precommit.py --prototype [--overwrite]
+```
+
+* formatting (gdformat, `dotnet format`, black) and lint (gdlint);
+* typing: `dotnet build` and `--check-only` on every GDScript (static types everywhere, 4.4);
+* no unit tests, no property-based tests, no end-to-end bot, no contracts, no balance bots;
+  no `languages.json`, PO/POT, `Grammar` or translation checks;
+* CI runs the same: `precommit.py --prototype` in the second step of `ci.yaml` (17).
+
+Write the texts already as whole sentences with named placeholders in `tr("...")`: it costs nothing now and makes the translation later mechanical.
+
+**Once the game works** (a play test with children shows the mechanics hold), harden it before the first release, in this order:
+
+1. the unit and property-based tests of the Godot-free core (12.1, 12.2) and the contracts in the code (12.3);
+2. the fake vision, the end-to-end bot and its contracts (12.4, 12.5), the test scenes (12.6), the balance bots (12.7);
+3. the translations (11): `languages.json`, `# TRANSLATORS:` comments, `Grammar`, extraction and checks;
+4. drop `--prototype` in `ci.yaml`: from now on every step runs on every push.
+
+Why: tests and translations of mechanics that are still changing are thrown away with them, and slow every iteration of the prototype; the fast checks still catch the typos and type errors at once.
 
 ---
 
@@ -1362,7 +1392,7 @@ func _candidates(piece: Piece, players: Array[Rect2], screen: Rect2) -> Array[Ve
 
 ## 11. Translations with PO and POT
 
-Translate from the first commit; retrofitting `tr()` into a finished game is far worse.
+Translate once the game works, before the first release (1); while prototyping, only write every text as a whole sentence in `tr()`.
 
 ### 11.1 In the code
 
@@ -1765,6 +1795,8 @@ The character limits are a first line of defence; the real checks are the tests 
 ---
 
 ## 12. Testing
+
+Write the tests once the game works (1); while prototyping, `precommit.py --prototype` checks only the formatting, lint and types.
 
 | Layer | How | Runs |
 |---|---|---|
@@ -3491,6 +3523,7 @@ jobs:
       - name: Check the formatting and lint
         run: venv/bin/python dev/continuous_integration/precommit.py --select reformat lint
 
+      # NOTE (mristin): While prototyping, add --prototype; drop it once the game works (section 1).
       - name: Run the checks and the tests
         run: venv/bin/python dev/continuous_integration/precommit.py --skip reformat lint
 ```
@@ -3781,15 +3814,21 @@ STEPS: Dict[str, Callable[[argparse.Namespace], bool]] = {
 }
 
 
+# While prototyping: only the formatting, lint and typing, to iterate fast (section 1).
+PROTOTYPE_STEPS = ["reformat", "lint", "build", "check-scripts"]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--overwrite", action="store_true", help="Fix the formatting and the translation files.")
-    parser.add_argument("--select", nargs="+", choices=list(STEPS), default=list(STEPS))
+    parser.add_argument("--prototype", action="store_true", help="Run only the formatting, lint and typing.")
+    parser.add_argument("--select", nargs="+", choices=list(STEPS), default=None)
     parser.add_argument("--skip", nargs="+", choices=list(STEPS), default=[])
     parser.add_argument("--godot", default=os.environ.get("GODOT", "godot"))
     parser.add_argument("--jobs", type=int, default=os.cpu_count() or 2)
     args = parser.parse_args()
-    for name in [s for s in args.select if s not in args.skip]:
+    selected = args.select or (PROTOTYPE_STEPS if args.prototype else list(STEPS))
+    for name in [s for s in selected if s not in args.skip]:
         print(f"=== {name}", flush=True)
         if not STEPS[name](args):
             print(f"The step {name} failed.", file=sys.stderr)
@@ -3879,7 +3918,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md); the design is in [DESIGN.md](DESIGN.md).
    and in bold: **Do not skip the `.gdignore`!**
 3. **Running the game**: `$GODOT --path . -- <flags>` and **every** flag: `--no-camera`, `--camera=<n>`, `--players=<n>`, `--lang=<code>`, `--mute`, `--no-voice`, `--skeleton`, `--record`, `--frames`, `--replay=<file>`, `--settings=<file>`, `--seed=<n>`, the developer keys.
 4. **The tests**: the commands; what the end-to-end bot does and its contracts; how to replay a seed; where the logs of failed runs are (`user://tests/logs/`).
-5. **Checks before a pull request**: `venv/bin/python dev/continuous_integration/precommit.py [--overwrite]`.
+5. **Checks before a pull request**: `venv/bin/python dev/continuous_integration/precommit.py [--overwrite]` (`--prototype` while prototyping).
 6. **Translations**: 11 in short: `tr()`, `# TRANSLATORS:`, the grammar, `extract.py`, `check.py`, adding a language, reviewing a draft.
 7. **Pictures, sounds, music**: the pipelines and the license rules (14, 15).
 8. **Recording**: consent, never commit, the tools.
@@ -4075,9 +4114,11 @@ The rest of `licenses/` is collected by `dev/publish.py` from its sources (the m
 1. Copy the layout of section 2; `.gitattributes`, `.gitignore`, every `.gdignore`; `git lfs install`.
 2. `project.godot`, the `.csproj`, the export presets (sections 2, 5.6, 16).
 3. Copy the vision (`scenes/vision/`), its tests and the camera extension; check that the models load and are not LFS pointers.
-4. `languages.json` with English and at least one more language; `Languages`, `Grammar`; `tr()` from the first text.
-5. The fake vision, the end-to-end bot, the contracts and the error log, with the first playable screen.
-6. `precommit.py`, `publish.py`, the two workflows; a first dry-run publish.
-7. README, CONTRIBUTING, DESIGN, THIRD_PARTY_NOTICES from section 19; `dev/write_godot_licenses.gd`.
-8. The style brief and the first sketch, prompt and painting; the sound and music manifests.
-9. A play test with children (with consent) before tuning anything.
+4. `precommit.py` and `ci.yaml` with `--prototype`: formatting, lint and typing only.
+5. Prototype the game until it is playable end to end; every text a whole sentence in `tr()`.
+6. A play test with children (with consent) before tuning anything.
+7. Once the game works: the unit and property-based tests, the fake vision, the end-to-end bot, the contracts and the error log.
+8. The translations: `languages.json` with English and at least one more language; `Languages`, `Grammar`, extraction and checks.
+9. Drop `--prototype`; `publish.py`, the publish workflow; a first dry-run publish.
+10. README, CONTRIBUTING, DESIGN, THIRD_PARTY_NOTICES from section 19; `dev/write_godot_licenses.gd`.
+11. The style brief and the first sketch, prompt and painting; the sound and music manifests.
