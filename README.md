@@ -70,6 +70,7 @@ Do it this way unless the game has a reason not to; if it has one, write the rea
   * **the player is never covered by a GUI/HUD element**;
   * every text is in the language of the game; the rules of the game hold.
 * Any Godot `ERROR` line fails a test.
+* The end-to-end tests **always run with `--fixed-fps 60`**, so a seed replays the same on every machine.
 
 **UI**
 * The dim mirrored camera picture behind everything; avatars drawn exactly on the players.
@@ -1966,7 +1967,9 @@ What it does:
 * plays every level of every chapter, with plausible random choices, some deliberate mistakes (about 12 %) and some quitting mid-way (about 6 %);
 * **switches the language every few levels** (shuffled by the seed), so one run covers every language;
 * **restarts the game** halfway and checks that the language and the journey come back from disk exactly;
-* runs with `--fixed-fps 60`, `Engine.time_scale = 10` and `Engine.max_fps = 0`; where a level needs more speed, it calls the level's `_process` for extra substeps and checks the contracts after each; it seeds the global RNG too;
+* **always runs with `--fixed-fps 60`**, locally, in CI and when replaying a seed: every frame then advances the game by exactly 1/60 s, however slow or fast the machine.
+  *Why:* without it the frame delta follows the wall clock, so the same seed plays differently on a laptop, in CI and under load, and a failure cannot be replayed.
+* on top of that, `Engine.time_scale = 10` and `Engine.max_fps = 0`; where a level needs more speed, it calls the level's `_process` for extra substeps and checks the contracts after each; it seeds the global RNG too;
 * detects being stuck: a card held but not chosen, no progress towards the goal, a task not done within N legs, a wall-clock limit;
 * **fails on any engine error**, even one the game survives;
 * **always logs** everything (the seed, every screen, every choice, every broken contract, every engine error) to `user://tests/logs/<test>_<seed>.log`, and **deletes the log itself when the run passed**; on a failure it keeps the log and prints its path.
