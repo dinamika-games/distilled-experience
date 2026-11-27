@@ -62,6 +62,7 @@ Do it this way unless the game has a reason not to; if it has one, write the rea
 **Order of work**
 * **Prototype first**: until the game works, only the formatting, lint and typing checks (`precommit.py --prototype`).
 * **Then** the tests and the translations, before the first release (see below).
+* **Then** the auto-save, versioned and backward compatible (13).
 
 **Quality**
 * Unit tests, **property-based tests** (CsCheck), and a **seeded end-to-end bot** that plays the whole game through the bridge at high speed and checks **contracts** on every frame:
@@ -99,6 +100,7 @@ venv/bin/python dev/continuous_integration/precommit.py --prototype [--overwrite
 * typing: `dotnet build` and `--check-only` on every GDScript (static types everywhere, 4.4);
 * no unit tests, no property-based tests, no end-to-end bot, no contracts, no balance bots;
   no `languages.json`, PO/POT, `Grammar` or translation checks;
+  no saves: every start is a new game;
 * CI runs the same: `precommit.py --prototype` in the second step of `ci.yaml` (17).
 
 Write the texts already as whole sentences with named placeholders in `tr("...")`: it costs nothing now and makes the translation later mechanical.
@@ -108,9 +110,11 @@ Write the texts already as whole sentences with named placeholders in `tr("...")
 1. the unit and property-based tests of the Godot-free core (12.1, 12.2) and the contracts in the code (12.3);
 2. the fake vision, the end-to-end bot and its contracts (12.4, 12.5), the test scenes (12.6), the balance bots (12.7);
 3. the translations (11): `languages.json`, `# TRANSLATORS:` comments, `Grammar`, extraction and checks;
-4. drop `--prototype` in `ci.yaml`: from now on every step runs on every push.
+4. the auto-save (13): format 1, its frozen save in `tests/godot/saves/`, the save contract of the bot;
+5. drop `--prototype` in `ci.yaml`: from now on every step runs on every push.
 
 Why: tests and translations of mechanics that are still changing are thrown away with them, and slow every iteration of the prototype; the fast checks still catch the typos and type errors at once.
+Saves come last: every change of the state during prototyping changes the save format too, and keeping formats and upgrades in step with it wastes more time than the saves are worth.
 
 ---
 
@@ -2570,7 +2574,13 @@ _check(no_run_stuck("random"), "random play got stuck: %s" % stuck_runs("random"
 
 ## 13. Saves
 
-* JSON in `user://`, with a `format` number.
+Every game **auto-saves**; the player never presses "save".
+Add it only once the prototyping is over, after the tests and the translations (1).
+
+* **Auto-save at the natural stops** (end of a level, a leg, a choice) and when the game is closed; load the save at start without asking.
+* **Versioned and backward compatible**: every save carries its `format`; a new release loads every format ever released and upgrades it.
+  Bump `FORMAT` and add an upgrade step whenever the saved data changes; never break an older save.
+* JSON in `user://`; the `format` number at the top level.
 * **Atomic**: write `<file>.tmp`, then rename it over the file; never remove the old file first.
   On load, if only the `.tmp` exists, use it.
 * **Refuse a newer format** (never overwrite what a newer game wrote).
@@ -4051,7 +4061,7 @@ The rest of `licenses/` is collected by `dev/publish.py` from its sources (the m
 * Check the clear space and tell the player to come closer or step back (6.7).
 
 **Children, rest and the end of a session**
-* Sessions with a clear end: levels of 3–5 minutes, a trip of about 10; save at the natural stops; nothing runs while the game is off.
+* Sessions with a clear end: levels of 3–5 minutes, a trip of about 10; auto-save at the natural stops (13); nothing runs while the game is off.
 * **Rest is part of the design**: calm screens between legs, gliding after strokes, things to look at and choose.
 * Auto-pause when the player leaves the picture.
 * **Never stuck**: after two failed tries the obstacle gives way; the game never needs precision a child cannot give.
@@ -4119,6 +4129,7 @@ The rest of `licenses/` is collected by `dev/publish.py` from its sources (the m
 6. A play test with children (with consent) before tuning anything.
 7. Once the game works: the unit and property-based tests, the fake vision, the end-to-end bot, the contracts and the error log.
 8. The translations: `languages.json` with English and at least one more language; `Languages`, `Grammar`, extraction and checks.
-9. Drop `--prototype`; `publish.py`, the publish workflow; a first dry-run publish.
-10. README, CONTRIBUTING, DESIGN, THIRD_PARTY_NOTICES from section 19; `dev/write_godot_licenses.gd`.
-11. The style brief and the first sketch, prompt and painting; the sound and music manifests.
+9. The auto-save, format 1, and its frozen save (section 13).
+10. Drop `--prototype`; `publish.py`, the publish workflow; a first dry-run publish.
+11. README, CONTRIBUTING, DESIGN, THIRD_PARTY_NOTICES from section 19; `dev/write_godot_licenses.gd`.
+12. The style brief and the first sketch, prompt and painting; the sound and music manifests.
