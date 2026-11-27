@@ -86,6 +86,7 @@ Do it this way unless the game has a reason not to; if it has one, write the rea
 
 **Delivery**
 * Every development script is **Python in `dev/`**; `dev/publish.py` exports, checks and zips every platform.
+* **`dev/continuous_integration/precommit.py`** runs every check as named steps (`format`, `lint`, `unit_tests`, `e2e_tests`, …), selectable with `--select`/`--skip`; **`--overwrite`** applies the auto-fixes; CI runs the same script without it (18).
 * GitHub Actions run CI on every push and publish on every release.
 * README (players), CONTRIBUTING (developers), DESIGN (designers), THIRD_PARTY_NOTICES (licenses).
 
@@ -3602,11 +3603,11 @@ jobs:
 
       # NOTE (mristin): We check the formatting and lint first, as a fast fail.
       - name: Check the formatting and lint
-        run: venv/bin/python dev/continuous_integration/precommit.py --select reformat lint
+        run: venv/bin/python dev/continuous_integration/precommit.py --select format lint
 
       # NOTE (mristin): While prototyping, add --prototype; drop it once the game works (section 1).
       - name: Run the checks and the tests
-        run: venv/bin/python dev/continuous_integration/precommit.py --skip reformat lint
+        run: venv/bin/python dev/continuous_integration/precommit.py --skip format lint
 ```
 
 `.github/workflows/publish.yaml`: on a published release, or by hand (without a tag: a dry run that only uploads the packages as artifacts).
@@ -3742,7 +3743,7 @@ The scripts every game has:
 
 | Script | Does |
 |---|---|
-| `dev/continuous_integration/precommit.py` | every check, in named steps; the same locally and in CI |
+| `dev/continuous_integration/precommit.py` | every check, as named steps; the same locally and in CI |
 | `dev/publish.py` | export, check, license, zip, upload (16) |
 | `dev/write_godot_licenses.gd` | `licenses/godot/` from the engine (19.4) |
 | `dev/translations/extract.py`, `check.py` | POT/PO (11.5) |
@@ -3752,7 +3753,35 @@ The scripts every game has:
 | `dev/balance/balance.gd` | the economy bots (12.7) |
 | `dev/screenshots/take_screenshots.py` | every screen in every language on Xvfb, for the README and for review |
 
-`dev/continuous_integration/precommit.py`:
+`dev/continuous_integration/precommit.py` is **the one entry point for every check**, locally and in CI.
+It runs named **steps**, in a fixed order, fast ones first:
+
+| Step | Checks | `--overwrite` |
+|---|---|---|
+| `format` | gdformat, `dotnet format`, black | reformats |
+| `lint` | gdlint | |
+| `lfs`, `assets` | binaries in LFS; every painting has its prompt | |
+| `translations` | POT/PO up to date; `check.py` | re-extracts, merges |
+| `build`, `import`, `check_scripts` | `dotnet build`; the Godot import; `--check-only` on every GDScript | |
+| `unit_tests` | `dotnet test`: unit and property-based tests (12.1, 12.2) | |
+| `smoke_scenes` | the main scene and every test scene start without an error | |
+| `godot_tests` | headless Godot tests outside `end2end/` (12.5–12.7, 13) | |
+| `e2e_tests` | `tests/godot/end2end/`: the bot and its contracts (12.4, 12.5) | |
+
+```
+venv/bin/python dev/continuous_integration/precommit.py                       # everything, check only
+venv/bin/python dev/continuous_integration/precommit.py --overwrite           # everything, auto-fix what can be fixed
+venv/bin/python dev/continuous_integration/precommit.py --select format lint --overwrite
+venv/bin/python dev/continuous_integration/precommit.py --skip e2e_tests      # a quick run while working
+venv/bin/python dev/continuous_integration/precommit.py --prototype           # format, lint, build, check_scripts
+```
+
+* **Without `--overwrite` nothing is written**: CI never passes it, so an unformatted file or a stale POT fails CI instead of being silently fixed there.
+* **With `--overwrite` the fixable steps fix** (formatting, POT/PO) and then still check; the others are unaffected. A failed fixable step says so.
+* A new kind of check is a new step (a function and an entry in `STEPS`), never a separate script that CI calls on its own.
+* Step names are `snake_case`, named for what they check, not for the tool.
+
+Why: one command to remember, the same in CI and locally; `--select`/`--skip` keep the loop fast, and `--overwrite` turns "fix the formatting" into a single command.
 
 ```python
 #!/usr/bin/env python3
@@ -3784,7 +3813,7 @@ def godot_failed(code: int, output: str) -> bool:
     return code != 0 or GODOT_ERROR_RE.search(output) is not None
 
 
-def reformat(args: argparse.Namespace) -> bool:
+def format_code(args: argparse.Namespace) -> bool:
     check = [] if args.overwrite else ["--check"]
     ok = run([sys.executable, "-m", "gdtoolkit.formatter", *check, "scenes", "tests/godot", "dev"])[0] == 0
     ok &= run(["dotnet", "format", SOLUTION, *([] if args.overwrite else ["--verify-no-changes"])])[0] == 0
@@ -3830,7 +3859,8 @@ def translations(args: argparse.Namespace) -> bool:
     return ok and run([sys.executable, "dev/translations/check.py"])[0] == 0
 
 
-def dotnet_test(args: argparse.Namespace) -> bool:
+def unit_tests(args: argparse.Namespace) -> bool:
+    # The unit and property-based tests of the Godot-free core (12.1, 12.2).
     return run(["dotnet", "test", SOLUTION])[0] == 0
 
 
@@ -3852,9 +3882,22 @@ def check_scripts(args: argparse.Namespace) -> bool:
     return _parallel(one, scripts, args.jobs)
 
 
-def godot_tests(args: argparse.Namespace) -> bool:
-    tests = sorted((REPO_ROOT / "tests" / "godot").rglob("test_*.gd"))
+def _godot_test_scripts(end2end: bool) -> List[pathlib.Path]:
+    folder = REPO_ROOT / "tests" / "godot"
+    return sorted(p for p in folder.rglob("test_*.gd") if ("end2end" in p.relative_to(folder).parts) == end2end)
 
+
+def godot_tests(args: argparse.Namespace) -> bool:
+    # The headless tests: mechanics, layout, font, HUD fuzz, balance, old saves (12.5–12.7, 13).
+    return _run_godot_tests(_godot_test_scripts(end2end=False), args)
+
+
+def e2e_tests(args: argparse.Namespace) -> bool:
+    # The seeded end-to-end bot with its contracts (12.4, 12.5).
+    return _run_godot_tests(_godot_test_scripts(end2end=True), args)
+
+
+def _run_godot_tests(tests: List[pathlib.Path], args: argparse.Namespace) -> bool:
     def one(test: pathlib.Path) -> Tuple[pathlib.Path, bool, str]:
         # With the fixed frame rate, Godot simulates the game time as fast as it can.
         code, output = run([args.godot, "--headless", "--fixed-fps", "60", "--path", ".", "--script", str(test),
@@ -3888,31 +3931,38 @@ def _parallel(one: Callable, items: List, jobs: int) -> bool:
     return ok
 
 
+# In the order they run: the fast ones first, so a typo fails in seconds.
 STEPS: Dict[str, Callable[[argparse.Namespace], bool]] = {
-    "reformat": reformat, "lint": lint, "lfs": lfs, "assets": assets, "translations": translations, "dotnet-test": dotnet_test,
-    "build": build, "import": godot_import, "check-scripts": check_scripts,
-    "godot-test": godot_tests, "smoke-scenes": smoke_scenes,
+    "format": format_code, "lint": lint, "lfs": lfs, "assets": assets, "translations": translations,
+    "build": build, "import": godot_import, "check_scripts": check_scripts,
+    "unit_tests": unit_tests, "smoke_scenes": smoke_scenes, "godot_tests": godot_tests, "e2e_tests": e2e_tests,
 }
 
 
 # While prototyping: only the formatting, lint and typing, to iterate fast (section 1).
-PROTOTYPE_STEPS = ["reformat", "lint", "build", "check-scripts"]
+PROTOTYPE_STEPS = ["format", "lint", "build", "check_scripts"]
+
+# The steps which --overwrite fixes; every other step only checks.
+OVERWRITABLE = {"format", "translations"}
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--overwrite", action="store_true", help="Fix the formatting and the translation files.")
+    parser.add_argument("--overwrite", action="store_true",
+                        help="Apply the auto-fixes (formatting, POT/PO) instead of only checking.")
     parser.add_argument("--prototype", action="store_true", help="Run only the formatting, lint and typing.")
-    parser.add_argument("--select", nargs="+", choices=list(STEPS), default=None)
-    parser.add_argument("--skip", nargs="+", choices=list(STEPS), default=[])
+    parser.add_argument("--select", nargs="+", choices=list(STEPS), default=None, help="Run only these steps.")
+    parser.add_argument("--skip", nargs="+", choices=list(STEPS), default=[], help="Skip these steps.")
     parser.add_argument("--godot", default=os.environ.get("GODOT", "godot"))
     parser.add_argument("--jobs", type=int, default=os.cpu_count() or 2)
     args = parser.parse_args()
     selected = args.select or (PROTOTYPE_STEPS if args.prototype else list(STEPS))
-    for name in [s for s in selected if s not in args.skip]:
+    # Always in the order of STEPS, whatever the order on the command line.
+    for name in [s for s in STEPS if s in selected and s not in args.skip]:
         print(f"=== {name}", flush=True)
         if not STEPS[name](args):
-            print(f"The step {name} failed.", file=sys.stderr)
+            fix = " Run again with --overwrite to fix it." if name in OVERWRITABLE else ""
+            print(f"The step {name} failed.{fix}", file=sys.stderr)
             return 1
     return 0
 
@@ -3999,7 +4049,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md); the design is in [DESIGN.md](DESIGN.md).
    and in bold: **Do not skip the `.gdignore`!**
 3. **Running the game**: `$GODOT --path . -- <flags>` and **every** flag: `--no-camera`, `--camera=<n>`, `--players=<n>`, `--lang=<code>`, `--mute`, `--no-voice`, `--skeleton`, `--record`, `--frames`, `--replay=<file>`, `--settings=<file>`, `--seed=<n>`, the developer keys.
 4. **The tests**: the commands; what the end-to-end bot does and its contracts; how to replay a seed; where the logs of failed runs are (`user://tests/logs/`).
-5. **Checks before a pull request**: `venv/bin/python dev/continuous_integration/precommit.py [--overwrite]` (`--prototype` while prototyping).
+5. **Checks before a pull request**: `venv/bin/python dev/continuous_integration/precommit.py [--overwrite]` (`--prototype` while prototyping); the list of steps and how to run one (`--select e2e_tests`).
 6. **Translations**: 11 in short: `tr()`, `# TRANSLATORS:`, the grammar, `extract.py`, `check.py`, adding a language, reviewing a draft.
 7. **Pictures, sounds, music**: the pipelines and the license rules (14, 15).
 8. **Recording**: consent, never commit, the tools.
