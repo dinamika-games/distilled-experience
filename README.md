@@ -79,6 +79,7 @@ Do it this way unless the game has a reason not to; if it has one, write the rea
 **Assets**
 * Pictures: **SVG sketch → generative AI → cut by script**, in separate **flat** folders; overlays sketched with **gray shapes for the player and dots for the anchors**.
   Prompts and raw paintings are committed.
+* **Always an icon and a GitHub social preview** (14.3), never the Godot default icon.
 * Sound effects: **CC0 or CC BY 4.0**, license checked by script.
   Music: **MIDI rendered with FluidSynth**.
 * Binaries in **Git LFS**.
@@ -125,6 +126,8 @@ Saves come last: every change of the state during prototyping changes the save f
 ├── project.godot            # config/version is the single source of the version
 ├── <Game>.csproj / .sln
 ├── export_presets.cfg       # Windows, Linux, macOS (universal)
+├── icon.png  icon.ico       # the icon (14.3)
+├── docs/                    # gameplay.gif, social_preview.png (14.3)
 ├── README.md  CONTRIBUTING.md  DESIGN.md  THIRD_PARTY_NOTICES.md  LICENSE
 ├── .gitattributes  .gitignore  gdformatrc  .editorconfig
 ├── .config/dotnet-tools.json            # dotnet-format pinned
@@ -157,7 +160,7 @@ Saves come last: every change of the state during prototyping changes the save f
 │   ├── publish.py
 │   ├── write_godot_licenses.gd
 │   ├── translations/{extract,check}.py
-│   ├── pictures/{sketches,prompts,painted}/  + cut_*.py
+│   ├── pictures/{sketches,prompts,painted}/  + cut_*.py, make_icons.py
 │   ├── sounds/{sources.json,make_sounds.py}
 │   └── music/{sources.json,make_music.py}
 ├── .github/workflows/{ci,publish}.yaml
@@ -199,6 +202,7 @@ Saves come last: every change of the state during prototyping changes the save f
 [application]
 config/name="<Game>"
 config/version="1.0.0"
+config/icon="res://icon.png"
 run/main_scene="res://scenes/main/main.tscn"
 
 [autoload]
@@ -2803,6 +2807,73 @@ if __name__ == "__main__":
     sys.exit(main())
 ```
 
+### 14.3 The icon and the social preview
+
+Every game has, as soon as its style brief exists, **an icon** (the favicon of the game) and **a social preview** (the picture GitHub shows when a link to the repository is shared).
+Both go through the pipeline of 14.1 like every other sheet (`icon` and `social_preview` in `sketches/`, `prompts/`, `painted/`), and one script makes every size from the two paintings:
+
+```
+icon.png                         # 512x512, the Godot icon (config/icon), the window and the macOS app
+icon.ico                         # 16–256 px, the Windows executable (export preset application/icon)
+docs/social_preview.png          # 1280x640, under 1 MB, uploaded to GitHub
+```
+
+* The icon is **one figure of the game on a plain background**, readable at 16x16: no text, a bold outline, few colours.
+* The social preview shows the **name of the game, the icon and a player playing it** in front of the dim camera picture; keep the important part 40 px away from every edge, since sites crop it.
+* Upload `docs/social_preview.png` in the repository *Settings → General → Social preview*; GitHub has no API for it, so check it by hand at every release.
+* Never keep the Godot default icon.
+  *Why:* a repository without a preview is shared as a gray card with the owner's avatar, and a game with the Godot icon looks unfinished in the taskbar and in the Dock.
+
+`dev/pictures/make_icons.py`:
+
+```python
+"""Make the icon and the social preview of the game from their cut paintings."""
+
+import argparse
+import pathlib
+import sys
+
+from PIL import Image
+
+REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
+ICON_SIZES = [16, 24, 32, 48, 64, 128, 256]
+PREVIEW_SIZE = (1280, 640)
+PREVIEW_MAX_BYTES = 1_000_000
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--icon", type=pathlib.Path, default=REPO_ROOT / "assets/pictures/icon.png")
+    parser.add_argument("--preview", type=pathlib.Path, default=REPO_ROOT / "assets/pictures/social_preview.png")
+    args = parser.parse_args()
+
+    icon = Image.open(args.icon).convert("RGBA")
+    if icon.width != icon.height:
+        print(f"The icon must be square, but {args.icon} is {icon.width}x{icon.height}", file=sys.stderr)
+        return 1
+    icon.resize((512, 512), Image.LANCZOS).save(REPO_ROOT / "icon.png")
+    icon.save(REPO_ROOT / "icon.ico", sizes=[(size, size) for size in ICON_SIZES])
+
+    preview = Image.open(args.preview).convert("RGB")
+    if preview.width * PREVIEW_SIZE[1] != preview.height * PREVIEW_SIZE[0]:
+        print(f"The social preview must be 2:1, but {args.preview} is {preview.width}x{preview.height}",
+              file=sys.stderr)
+        return 1
+    target = REPO_ROOT / "docs/social_preview.png"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    preview.resize(PREVIEW_SIZE, Image.LANCZOS).save(target, optimize=True)
+    if target.stat().st_size > PREVIEW_MAX_BYTES:
+        print(f"{target} has {target.stat().st_size} bytes; GitHub accepts at most {PREVIEW_MAX_BYTES}",
+              file=sys.stderr)
+        return 1
+    print(f"Wrote icon.png, icon.ico and {target.relative_to(REPO_ROOT)}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+```
+
 ---
 
 ## 15. Sound effects and music
@@ -4133,3 +4204,4 @@ The rest of `licenses/` is collected by `dev/publish.py` from its sources (the m
 10. Drop `--prototype`; `publish.py`, the publish workflow; a first dry-run publish.
 11. README, CONTRIBUTING, DESIGN, THIRD_PARTY_NOTICES from section 19; `dev/write_godot_licenses.gd`.
 12. The style brief and the first sketch, prompt and painting; the sound and music manifests.
+13. The icon and the social preview (section 14.3); upload the preview in the GitHub settings of the repository.
